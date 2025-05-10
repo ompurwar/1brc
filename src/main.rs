@@ -19,26 +19,27 @@ fn main() -> std::io::Result<()> {
     let reader = BufReader::new(content.as_bytes());
 
     let mut final_map: FxHashMap<String, (u64, f64, f64, f64)> = FxHashMap::default();
-    let mut chunk = Vec::with_capacity(10_000);
-    let mut total_processed = 0;
+    let chunk_size =100_0000;
+    let mut chunk: Vec<String> = Vec::with_capacity(chunk_size);
+    let mut total_processed: usize = 0;
     let mut next_log_threshold = 1_000_000;
 
     let start = Instant::now();
 
-    for line in reader.lines() {
+    for line  in reader.lines() {
         if let Ok(line) = line {
             chunk.push(line);
-            if chunk.len() == 10_000 {
+            if chunk.len() == chunk_size {
                 let partial = process_chunk(&chunk);
                 for (city, (count, min, sum, max)) in partial {
-                    let entry = final_map.entry(city).or_insert((0, min, 0.0, max));
+                    let entry = final_map.entry(city.to_string()).or_insert((0, min, 0.0, max));
                     entry.0 += count;
                     entry.1 = entry.1.min(min);
                     entry.2 += sum;
                     entry.3 = entry.3.max(max);
                 }
 
-                total_processed += 10_000;
+                total_processed += chunk_size;
                 chunk.clear();
 
                 if total_processed >= next_log_threshold {
@@ -56,7 +57,7 @@ fn main() -> std::io::Result<()> {
     if !chunk.is_empty() {
         let partial = process_chunk(&chunk);
         for (city, (count, min, sum, max)) in partial {
-            let entry = final_map.entry(city).or_insert((0, min, 0.0, max));
+            let entry = final_map.entry(city.to_string()).or_insert((0, min, 0.0, max));
             entry.0 += count;
             entry.1 = entry.1.min(min);
             entry.2 += sum;
@@ -83,12 +84,12 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn process_chunk(chunk: &[String]) -> FxHashMap<String, (u64, f64, f64, f64)> {
-    let mut map: FxHashMap<String, (u64, f64, f64, f64)> = FxHashMap::default();
+fn process_chunk(chunk: &[String]) -> FxHashMap<&str, (u64, f64, f64, f64)>{
+    let mut map: FxHashMap<&str, (u64, f64, f64, f64)> = FxHashMap::default();
     for line in chunk {
         if let Some((city, temp_str)) = line.split_once(';') {
             if let Ok(temp) = temp_str.parse::<f64>() {
-                let entry = map.entry(city.to_string()).or_insert((0, temp, 0.0, temp));
+                let entry = map.entry(city).or_insert((0, temp, 0.0, temp));
                 entry.0 += 1;
                 entry.1 = entry.1.min(temp);
                 entry.2 += temp;
