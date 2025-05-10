@@ -10,6 +10,7 @@ hashbrown = "0.15"
 rustc-hash = "2.1.1"
 fast-float = "0.2.0"
 rand = "0.8"
+memchr = "2.7.4"
 
 [dev-dependencies]
 criterion = "0.5"

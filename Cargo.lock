@@ -459,6 +459,7 @@ dependencies = [
  "criterion",
  "fast-float",
  "hashbrown",
+ "memchr",
  "memmap2",
  "rand",
  "rayon",
