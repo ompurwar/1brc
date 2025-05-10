@@ -9,7 +9,9 @@ rayon = "1.8"
 hashbrown = "0.15"
 rustc-hash = "2.1.1"
 fast-float = "0.2.0"
-rand = "0.8"
+rand = "0.9.1"
+crossbeam ="0.8.4"
+num_cpus = "1.16.0"
 
 [dev-dependencies]
 criterion = "0.5"
