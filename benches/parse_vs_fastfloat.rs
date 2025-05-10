@@ -1,3 +1,7 @@
+use criterion::{criterion_group, criterion_main, Criterion};
+use fast_float::parse as fast_parse;
+use hashbrown::HashMap;
+use memmap2::Mmap;
 use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::{fs::File, hash::BuildHasherDefault};

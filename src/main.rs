@@ -111,7 +111,3 @@ fn process_chunk(chunk: &[String]) -> FxHashMap<String, (u64, f64, f64, f64)> {
     }
     map
 }
-
-
-
-
