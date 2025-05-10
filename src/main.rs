@@ -16,17 +16,6 @@ fn main() -> std::io::Result<()> {
     let mmap = unsafe { Mmap::map(&file)? };
     let content = std::str::from_utf8(&mmap).expect("File must be valid UTF-8");
 
-    let thread_count = std::env::var("THREADS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-    println!("Creating thread pool with {thread_count} threads...");
-
-    ThreadPoolBuilder::new()
-        .num_threads(thread_count)
-        .build_global()
-        .expect("Failed to build Rayon thread pool");
-
     let reader = BufReader::new(content.as_bytes());
 
     let mut final_map: FxHashMap<String, (u64, f64, f64, f64)> = FxHashMap::default();
@@ -53,11 +42,10 @@ fn main() -> std::io::Result<()> {
                 chunk.clear();
 
                 if total_processed >= next_log_threshold {
-                    let elapsed = start.elapsed();
-                    let speed = total_processed as f64 / elapsed.as_secs_f64();
-                    println!(
-                        "📊 Processed {} lines so far. Speed: {:.2} lines/sec",
-                        total_processed, speed
+                    let speed = total_processed as f64 / start.elapsed().as_secs_f64();
+                    log_stage(
+                        &start,
+                        &format!("📊 Processed {} lines so far. Speed: {:.2} lines/sec", total_processed, speed),
                     );
                     next_log_threshold += 1_000_000;
                 }
@@ -83,14 +71,13 @@ fn main() -> std::io::Result<()> {
         .collect();
 
     let duration = start.elapsed();
-    println!(
-        "\n✅ Done. Processed {total_processed} lines in {:.2?}",
-        duration
-    );
-    println!("Total unique cities: {}", result_map.len());
-
+    log_stage(&start, &format!("✅ Done. Processed {} lines in {:.2?}", total_processed, duration));
+    log_stage(&start, &format!("Total unique cities: {}", result_map.len()));
     for (city, (min, mean, max)) in result_map.iter().take(10) {
-        println!("{city}: min={min:.2}, mean={mean:.2}, max={max:.2}");
+        log_stage(
+            &start,
+            &format!("{city}: min={:.2}, mean={:.2}, max={:.2}", min, mean, max),
+        );
     }
 
     Ok(())
@@ -110,4 +97,10 @@ fn process_chunk(chunk: &[String]) -> FxHashMap<String, (u64, f64, f64, f64)> {
         }
     }
     map
+}
+
+// helper for timestamped logging
+fn log_stage(start: &Instant, msg: &str) {
+    let elapsed = start.elapsed().as_secs_f64();
+    println!("[{:>6.2}s] {}", elapsed, msg);
 }
