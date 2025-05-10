@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use hashbrown::HashMap;
+use memchr::memchr_iter;
 use memmap2::Mmap;
 use rayon::prelude::*;
 use rustc_hash::FxHasher;
@@ -18,32 +19,33 @@ fn main() -> std::io::Result<()> {
 
     let file = File::open("./data/weather_stations_1000000000.csv")?;
     let mmap = unsafe { Mmap::map(&file)? };
-    let content = std::str::from_utf8(&mmap).expect("UTF-8 expected");
-
-    log_stage(&start, "📦 Streaming lines and dispatching chunks");
-
-    let chunk_size = 5_000_000;
+    let bytes = mmap.as_ref();
     let mut chunks: Vec<Vec<&str>> = Vec::new();
+    let chunk_size = 10_000_000;
     let mut current_chunk = Vec::with_capacity(chunk_size);
 
-    for line in content.split('\n') {
-        if !line.is_empty() {
-            current_chunk.push(line);
-            if current_chunk.len() == chunk_size {
-                chunks.push(current_chunk);
-                current_chunk = Vec::with_capacity(chunk_size);
-                let processed_so_far: usize = chunks.iter().map(|c| c.len()).sum();
-                log_stage(
-                    &start,
-                    &format!(
-                        "📈 Progress: Collected {} chunks (~{} lines each), {} lines processed so far",
+    log_stage(&start, "📦 Splitting content with memchr");
+
+    let mut start_idx = 0;
+    for nl_pos in memchr_iter(b'\n', bytes) {
+        if nl_pos > start_idx {
+            let line = &bytes[start_idx..nl_pos];
+            if let Ok(s) = std::str::from_utf8(line) {
+                current_chunk.push(s);
+                if current_chunk.len() == chunk_size {
+                    chunks.push(current_chunk);
+                    current_chunk = Vec::with_capacity(chunk_size);
+                    let processed: usize = chunks.iter().map(|c| c.len()).sum();
+                    log_stage(&start, &format!(
+                        "📈 Collected {} chunks (~{} lines each), {} lines processed so far",
                         chunks.len(),
                         chunk_size,
-                        processed_so_far
-                    ),
-                );
+                        processed
+                    ));
+                }
             }
         }
+        start_idx = nl_pos + 1;
     }
 
     if !current_chunk.is_empty() {
@@ -51,7 +53,7 @@ fn main() -> std::io::Result<()> {
     }
 
     let total_lines: usize = chunks.iter().map(|c| c.len()).sum();
-    log_stage(&start, &format!("🧠 Collected {} chunks (~{} lines each)", chunks.len(), chunk_size));
+    log_stage(&start, &format!("🧠 Collected {} chunks", chunks.len()));
     log_stage(&start, "⚙️ Parallel processing of chunks");
 
     let global_counter = Arc::new(AtomicUsize::new(0));

@@ -519,6 +519,7 @@ dependencies = [
  "crossbeam",
  "fast-float",
  "hashbrown",
+ "memchr",
  "memmap2",
  "num_cpus",
  "rand",

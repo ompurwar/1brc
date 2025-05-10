@@ -12,6 +12,7 @@ fast-float = "0.2.0"
 rand = "0.9.1"
 crossbeam ="0.8.4"
 num_cpus = "1.16.0"
+memchr = "2.7.4"
 
 [dev-dependencies]
 criterion = "0.5"
