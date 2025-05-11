@@ -6,6 +6,9 @@ sudo apt update
 # Install Rust using rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
+# Source Rust environment to avoid shell restart
+source $HOME/.cargo/env
+
 # Install build essentials
 sudo apt install -y build-essential
 
