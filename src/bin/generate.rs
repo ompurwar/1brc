@@ -5,7 +5,7 @@ use std::time::Instant;
 
 fn main() -> std::io::Result<()> {
     let row_count = 1_000_000_000; // change this: e.g. 1_000_000_000 for 1B
-    let unique_cities = 10_000; // Number of unique city names
+    let unique_cities = 50_000; // Number of unique city names
 
     let file = File::create(format!("./data/weather_stations_{}.csv", row_count))?;
     let mut writer = BufWriter::new(file);
@@ -13,9 +13,7 @@ fn main() -> std::io::Result<()> {
     let mut rng = rand::thread_rng();
     let temp_range = Uniform::new_inclusive(-50.0, 60.0); // plausible temp range
 
-    let cities: Vec<String> = (0..unique_cities)
-        .map(|i| format!("City_{}", i))
-        .collect();
+    let cities: Vec<String> = (0..unique_cities).map(|i| format!("City_{}", i)).collect();
 
     let start = Instant::now();
 
@@ -28,10 +26,7 @@ fn main() -> std::io::Result<()> {
     writer.flush()?;
 
     let duration = start.elapsed();
-    println!(
-        "✅ Done writing {} rows in {:.2?}",
-        row_count, duration
-    );
+    println!("✅ Done writing {} rows in {:.2?}", row_count, duration);
 
     Ok(())
 }
