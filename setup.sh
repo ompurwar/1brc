@@ -16,7 +16,10 @@ sudo apt install -y ncdu
 sudo apt install -y ntop
 
 # Clone the repository
-# git clone https://github.com/ompurwar/1brc.git
+git clone https://github.com/ompurwar/1brc.git
+
+git branch pipeline-with-splitting-processing-producer-condumer
+git pull origin pipeline-with-splitting-processing-producer-condumer
 
 # Navigate to the repository directory
 cd ./1brc

@@ -41,6 +41,13 @@ resource "aws_instance" "app_server" {
   key_name = aws_key_pair.generated_key.key_name # Reference the generated key pair
   security_groups = [aws_security_group.allow_ssh.name] # Attach the security group
 
+  root_block_device {
+    delete_on_termination = true
+    volume_size           = 100
+    volume_type           = "io1" # Fastest IOPS
+    iops                  = 4000   # Maximum IOPS for io1 with 100GB
+  }
+
   tags = {
     Name = "1brc-test-run" # Updated name tag
   }
