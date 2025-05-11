@@ -1,134 +1,123 @@
 use std::fs::File;
-use std::hash::BuildHasherDefault;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use std::thread;
+use std::hash::BuildHasherDefault;
 
-use hashbrown::HashMap;
-use memchr::memchr_iter;
 use memmap2::Mmap;
-use rayon::prelude::*;
+use memchr::memchr_iter;
+use crossbeam::channel::bounded;
+use hashbrown::HashMap;
 use rustc_hash::FxHasher;
+use rayon::prelude::*;
 
-type FxMap<'a> = HashMap<&'a str, (u64, f64, f64, f64), BuildHasherDefault<FxHasher>>;
-type FinalMap = HashMap<String, (f64, f64, f64), BuildHasherDefault<FxHasher>>;
+// Per‐chunk stats: (count, min, sum, max), with owned String keys
+type ChunkMap = HashMap<String, (u64, f32, f32, f32), BuildHasherDefault<FxHasher>>;
+// Final stats: (min, mean, max)
+type FinalMap = HashMap<String, (f32, f32, f32), BuildHasherDefault<FxHasher>>;
 
 fn main() -> std::io::Result<()> {
     let start = Instant::now();
     log_stage(&start, "🚀 Memory-mapping the file");
 
+    // 1. Memory‐map the CSV
     let file = File::open("./data/weather_stations_1000000000.csv")?;
-    let mmap = unsafe { Mmap::map(&file)? };
-    let bytes = mmap.as_ref();
-    let mut chunks: Vec<Vec<&str>> = Vec::new();
-    let chunk_size = 10_000_000;
-    let mut current_chunk = Vec::with_capacity(chunk_size);
+    let mmap = Arc::new(unsafe { Mmap::map(&file)? });
 
-    log_stage(&start, "📦 Splitting content with memchr");
+    let chunk_size = 20_000_000;
 
-    let mut start_idx = 0;
-    for nl_pos in memchr_iter(b'\n', bytes) {
-        if nl_pos > start_idx {
-            let line = &bytes[start_idx..nl_pos];
-            if let Ok(s) = std::str::from_utf8(line) {
-                current_chunk.push(s);
-                if current_chunk.len() == chunk_size {
-                    chunks.push(current_chunk);
-                    current_chunk = Vec::with_capacity(chunk_size);
-                    let processed: usize = chunks.iter().map(|c| c.len()).sum();
-                    log_stage(&start, &format!(
-                        "📈 Collected {} chunks (~{} lines each), {} lines processed so far",
-                        chunks.len(),
-                        chunk_size,
-                        processed
-                    ));
+    // 2. Producer + Consumer + Rayon reduction in a scoped thread
+    let combined: ChunkMap = thread::scope(|s| {
+        let (sender, receiver) = bounded::<Vec<(usize, usize)>>(100);
+        let producer_mmap = Arc::clone(&mmap);
+
+        // Producer: collect byte‐ranges of each line
+        s.spawn(move || {
+            let bytes: &[u8] = &*producer_mmap;
+            let mut buf = Vec::with_capacity(chunk_size);
+            let mut line_offset = 0;
+            let mut total_lines = 0;
+
+            for nl in memchr_iter(b'\n', bytes) {
+                if nl > line_offset {
+                    buf.push((line_offset, nl));
+                    total_lines += 1;
+                    if buf.len() == chunk_size {
+                        sender.send(std::mem::take(&mut buf)).unwrap();
+                        log_stage(&start, &format!("📤 Sent {} lines", total_lines));
+                        buf = Vec::with_capacity(chunk_size);
+                    }
                 }
+                line_offset = nl + 1;
             }
-        }
-        start_idx = nl_pos + 1;
-    }
+            if !buf.is_empty() {
+                sender.send(buf).unwrap();
+            }
+            log_stage(&start, &format!("✅ Finished splitting {} lines", total_lines));
+            drop(sender);
+        });
 
-    if !current_chunk.is_empty() {
-        chunks.push(current_chunk);
-    }
+        // Consumer + parallel processing + reduction
+        let mmap_for_tasks = Arc::clone(&mmap);
+        receiver
+            .into_iter()
+            .par_bridge()
+            .map({
+                // Capture the Arc<Mmap> by value; each task bumps ref count
+                let mmap = Arc::clone(&mmap_for_tasks);
+                move |ranges: Vec<(usize, usize)>| {
+                    let bytes: &[u8] = &*mmap;
+                    let mut map: ChunkMap = ChunkMap::default();
 
-    let total_lines: usize = chunks.iter().map(|c| c.len()).sum();
-    log_stage(&start, &format!("🧠 Collected {} chunks", chunks.len()));
-    log_stage(&start, "⚙️ Parallel processing of chunks");
+                    for (start, end) in ranges {
+                        if let Ok(line) = std::str::from_utf8(&bytes[start..end]) {
+                            if let Some((city, temp_str)) = line.split_once(';') {
+                                if let Ok(temp) = temp_str.parse::<f32>() {
+                                    // Use owned String key
+                                    let key = city.to_string();
+                                    let entry = map.entry(key).or_insert((0, temp, 0.0, temp));
+                                    entry.0 += 1;
+                                    entry.1 = entry.1.min(temp);
+                                    entry.2 += temp;
+                                    entry.3 = entry.3.max(temp);
+                                }
+                            }
+                        }
+                    }
 
-    let global_counter = Arc::new(AtomicUsize::new(0));
-    let log_threshold = 10_000_000;
-
-    let reduced: FxMap = chunks
-        .into_par_iter()
-        .map_init(
-            || (Instant::now(), Arc::clone(&global_counter)),
-            |(thread_start, counter), chunk| {
-                let chunk_start = Instant::now();
-                let processed = chunk.len();
-                let partial = process_chunk(chunk);
-
-                let new_total = counter.fetch_add(processed, Ordering::Relaxed) + processed;
-                if new_total % log_threshold < processed {
-                    let avg_speed = new_total as f64 / thread_start.elapsed().as_secs_f64();
-                    let inst_speed = processed as f64 / chunk_start.elapsed().as_secs_f64();
-                    log_stage(
-                        &thread_start,
-                        &format!(
-                            "📊 Processed {new_total} lines | Avg: {:.2} lines/sec | ⚡ Instant: {:.2} lines/sec",
-                            avg_speed, inst_speed
-                        ),
-                    );
+                    map
                 }
-
-                partial
-            },
-        )
-        .reduce(
-            || FxMap::default(),
-            |mut acc, map| {
-                for (city, (count, min, sum, max)) in map {
-                    let e = acc.entry(city).or_insert((0, min, 0.0, max));
-                    e.0 += count;
-                    e.1 = e.1.min(min);
+            })
+            .reduce(ChunkMap::default, |mut acc, chunk_map| {
+                for (city, (cnt, mn, sum, mx)) in chunk_map {
+                    let e = acc.entry(city).or_insert((0, mn, 0.0, mx));
+                    e.0 += cnt;
+                    e.1 = e.1.min(mn);
                     e.2 += sum;
-                    e.3 = e.3.max(max);
+                    e.3 = e.3.max(mx);
                 }
                 acc
-            },
-        );
+            })
+    });
 
-    log_stage(&start, "🧮 Aggregation complete. Finalizing averages");
-
-    let result: FinalMap = reduced
+    // 3. Final aggregation: compute mean
+    log_stage(&start, "🧮 Finalizing averages");
+    let final_map: FinalMap = combined
         .into_iter()
-        .map(|(city, (count, min, sum, max))| (city.to_string(), (min, sum / count as f64, max)))
+        .map(|(city, (cnt, mn, sum, mx))| {
+            (city, (mn, sum / cnt as f32, mx))
+        })
         .collect();
 
-    log_stage(&start, &format!("✅ Done. Processed {} lines in {:.2?}", total_lines, start.elapsed()));
-    log_stage(&start, &format!("📍 Total unique cities: {}", result.len()));
+    log_stage(&start, &format!("✅ Done in {:.2?}", start.elapsed()));
+    log_stage(&start, &format!("📍 Total unique cities: {}", final_map.len()));
 
-    for (city, (min, mean, max)) in result.iter().take(10) {
-        println!("  {city}: min={min:.2}, mean={mean:.2}, max={max:.2}");
+    // Print top 10 cities
+    for (city, (mn, mean, mx)) in final_map.iter().take(10) {
+        println!("{:20} min={:.2}, mean={:.2}, max={:.2}", city, mn, mean, mx);
     }
 
     Ok(())
-}
-
-fn process_chunk<'a>(chunk: Vec<&'a str>) -> FxMap<'a> {
-    let mut map: FxMap<'a> = FxMap::default();
-    for line in chunk {
-        if let Some((city, temp_str)) = line.split_once(';') {
-            if let Ok(temp) = temp_str.parse::<f64>() {
-                let entry = map.entry(city).or_insert((0, temp, 0.0, temp));
-                entry.0 += 1;
-                entry.1 = entry.1.min(temp);
-                entry.2 += temp;
-                entry.3 = entry.3.max(temp);
-            }
-        }
-    }
-    map
 }
 
 fn log_stage(start: &Instant, msg: &str) {
