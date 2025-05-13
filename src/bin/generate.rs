@@ -4,9 +4,23 @@ use std::io::{BufWriter, Write as IoWrite};
 use std::sync::{Arc, Mutex, mpsc, atomic::{AtomicU64, AtomicBool, Ordering}};
 use std::time::{Instant, Duration};
 use std::thread;
+use indicatif::{ProgressBar, ProgressStyle};
+use num::integer::gcd;
 
 fn log_stage(start: &Instant, msg: &str) {
     println!("[{:>6.2}s] {}", start.elapsed().as_secs_f64(), msg);
+}
+
+fn humanize_number(n: u64) -> String {
+    if n >= 1_000_000_000 {
+        format!("{:.2}b", n as f64 / 1_000_000_000.0)
+    } else if n >= 1_000_000 {
+        format!("{:.2}m", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.2}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
 }
 
 struct ProgressStats {
@@ -85,8 +99,15 @@ fn main() -> std::io::Result<()> {
     }
     log_stage(&main_start, &format!("Initialized and sent {} empty buffers to pool.", NUM_RING_BUFFERS));
 
+    // ProgressBar setup (indicatif)
+    let pb = ProgressBar::new(row_count as u64);
+    pb.set_style(ProgressStyle::with_template(
+        "{bar:40.cyan/blue} {pos:>12}/{len:12} lines [{percent:>3}%] {elapsed_precise} ETA {eta_precise}"
+    ).unwrap());
+
     let progress_thread_stats = Arc::clone(&progress_stats);
     let progress_thread_shutdown_signal = Arc::clone(&keep_progress_thread_running);
+    let pb_for_thread = pb.clone();
     let progress_handle = thread::spawn(move || {
         while progress_thread_shutdown_signal.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(500));
@@ -126,19 +147,33 @@ fn main() -> std::io::Result<()> {
             let write_lines_rate = if write_lines_rate < 0.0 { 0.0 } else { write_lines_rate };
             let write_bytes_rate = if write_bytes_rate < 0.0 { 0.0 } else { write_bytes_rate };
 
-            print!(
-                "\r[Gen: {:>6.2}% | {:>7.0} lines/s | {:>5.1} MB/s] [Write: {:>6.2}% | {:>7.0} lines/s | {:>5.1} MB/s] Total Lines: {}/{} ",
+            // Humanize numbers
+            let gen_lines_h = humanize_number(current_generated_lines);
+            let gen_bytes_h = humanize_number(current_generated_bytes);
+            let write_lines_h = humanize_number(current_written_lines);
+            let write_bytes_h = humanize_number(current_written_bytes);
+            let total_lines_h = humanize_number(stats.total_lines as u64);
+
+            // Ratio as gen:written (simplified)
+            let ratio_gcd = gcd(current_generated_lines, current_written_lines.max(1));
+            let ratio_gen = current_generated_lines / ratio_gcd;
+            let ratio_written = current_written_lines / ratio_gcd;
+
+            println!(
+                "\r[Gen: {:>6.2}% | {:>7.0} lines/s | {:>5.1} MB/s] [Write: {:>6.2}% | {:>7.0} lines/s | {:>5.1} MB/s] Ratio: {}:{}  Gen: {} lines/{} MB  Write: {} lines/{} MB  Total: {} lines",
                 gen_progress_pct,
                 gen_lines_rate,
                 gen_bytes_rate / (1024.0 * 1024.0),
                 write_progress_pct,
                 write_lines_rate,
                 write_bytes_rate / (1024.0 * 1024.0),
-                current_written_lines,
-                stats.total_lines
+                ratio_gen, ratio_written,
+                gen_lines_h, gen_bytes_h, write_lines_h, write_bytes_h, total_lines_h
             );
-            std::io::stdout().flush().unwrap_or_default();
+            pb_for_thread.set_position(current_written_lines);
         }
+        pb_for_thread.finish_and_clear();
+        // Clean up the last line
         print!("\r{: <120}\r", "");
         std::io::stdout().flush().unwrap_or_default();
     });

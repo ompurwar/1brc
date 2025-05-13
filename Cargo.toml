@@ -13,6 +13,8 @@ rand = "0.8.0"
 crossbeam ="0.8.4"
 num_cpus = "1.16.0"
 memchr = "2.7.4"
+indicatif = "0.17.11"
+num = "0.4.2"
 
 [dev-dependencies]
 criterion = "0.5"
