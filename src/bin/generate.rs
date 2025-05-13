@@ -139,11 +139,13 @@ fn main() -> std::io::Result<()> {
             } // Mutex guard dropped
             buffer_for_writing.clear(); // Ensure it's pristine for this chunk
 
+            let mut local_rng = rand::thread_rng(); // Create RNG once per Rayon task
+
             for _idx_in_chunk in chunk_of_indices { // We only care about the count of items for this chunk
-                let city = task_cities.choose(&mut rand::thread_rng()).unwrap();
-                let temp: f64 = rand::thread_rng().sample(temp_range);
-                let line = format!("{};{:.4}\n", city, temp);
-                buffer_for_writing.extend_from_slice(line.as_bytes());
+                let city = task_cities.choose(&mut local_rng).unwrap(); // Reuse local_rng
+                let temp: f64 = local_rng.sample(temp_range);      // Reuse local_rng
+                // Write directly to the Vec<u8> buffer, requires IoWrite trait in scope
+                writeln!(buffer_for_writing, "{};{:.4}", city, temp).unwrap();
             }
             
             // log_stage(&task_start_time, &format!("Producer task finished generating data ({} bytes) for {} items. Sending to full pool.", buffer_for_writing.len(), current_chunk_item_count));
