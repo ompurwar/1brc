@@ -10,6 +10,7 @@ use crossbeam::channel::bounded;
 use hashbrown::HashMap;
 use rustc_hash::FxHasher;
 use rayon::prelude::*;
+use fast_float::parse as fast_parse;
 
 // Per‐chunk stats: (count, min, sum, max), with owned String keys
 type ChunkMap = HashMap<String, (u64, f32, f32, f32), BuildHasherDefault<FxHasher>>;
@@ -72,7 +73,7 @@ fn main() -> std::io::Result<()> {
                     for (start, end) in ranges {
                         if let Ok(line) = std::str::from_utf8(&bytes[start..end]) {
                             if let Some((city, temp_str)) = line.split_once(';') {
-                                if let Ok(temp) = temp_str.parse::<f32>() {
+                                if let Ok(temp) = fast_parse::<f32, _>(temp_str) {
                                     // Use owned String key
                                     let key = city.to_string();
                                     let entry = map.entry(key).or_insert((0, temp, 0.0, temp));
