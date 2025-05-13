@@ -102,7 +102,7 @@ fn main() -> std::io::Result<()> {
     // ProgressBar setup (indicatif)
     let pb = ProgressBar::new(row_count as u64);
     pb.set_style(ProgressStyle::with_template(
-        "{bar:40.cyan/blue} {pos:>12}/{len:12} lines [{percent:>3}%] {elapsed_precise} ETA {eta_precise}"
+        "{bar:40.cyan/blue} {pos:>12}/{len:12} lines [{percent:>3}%] {elapsed_precise} ETA {eta_precise}\n{msg}"
     ).unwrap());
 
     let progress_thread_stats = Arc::clone(&progress_stats);
@@ -159,8 +159,8 @@ fn main() -> std::io::Result<()> {
             let ratio_gen = current_generated_lines / ratio_gcd;
             let ratio_written = current_written_lines / ratio_gcd;
 
-            println!(
-                "\r[Gen: {:>6.2}% | {:>7.0} lines/s | {:>5.1} MB/s] [Write: {:>6.2}% | {:>7.0} lines/s | {:>5.1} MB/s] Ratio: {}:{}  Gen: {} lines/{} MB  Write: {} lines/{} MB  Total: {} lines",
+            let msg = format!(
+                "[Gen: {:>6.2}% | {:>7.0} lines/s | {:>5.1} MB/s] [Write: {:>6.2}% | {:>7.0} lines/s | {:>5.1} MB/s] Ratio: {}:{}\nGen: {} lines/{} MB  Write: {} lines/{} MB  Total: {} lines",
                 gen_progress_pct,
                 gen_lines_rate,
                 gen_bytes_rate / (1024.0 * 1024.0),
@@ -171,6 +171,7 @@ fn main() -> std::io::Result<()> {
                 gen_lines_h, gen_bytes_h, write_lines_h, write_bytes_h, total_lines_h
             );
             pb_for_thread.set_position(current_written_lines);
+            pb_for_thread.set_message(msg);
         }
         pb_for_thread.finish_and_clear();
         // Clean up the last line
