@@ -17,10 +17,10 @@ fn main() -> std::io::Result<()> {
 
     let row_count: usize = 1_000_000_000;
     let unique_cities = 50_000;
-    let chunk_size: usize = 100_000_000; // Number of rows processed by each Rayon task into one buffer
+    let chunk_size: usize = 1_000_000; // Number of rows processed by each Rayon task into one buffer (was 100_000_000)
 
     // Ring buffer configuration
-    const NUM_RING_BUFFERS: usize = 6; // Number of buffers in the system
+    const NUM_RING_BUFFERS: usize = 12; // Number of buffers in the system (was 6)
                                        // Estimate ~30 bytes per line (e.g., "City_12345;-XX.XXXX\\n")
     let single_buffer_capacity: usize = chunk_size.saturating_mul(30).max(1024 * 1024); // Min 1MB capacity
     log_stage(&main_start, &format!("Config: {} rows, {} unique cities, {} rows/chunk, {} ring buffers, ~{:.2}MB/buffer",
