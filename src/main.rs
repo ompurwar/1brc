@@ -11,6 +11,10 @@ use hashbrown::HashMap;
 use rustc_hash::FxHasher;
 use rayon::prelude::*;
 use fast_float::parse as fast_parse;
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 // Per‐chunk stats: (count, min, sum, max), with owned String keys
 type ChunkMap = HashMap<String, (u64, f32, f32, f32), BuildHasherDefault<FxHasher>>;
@@ -26,6 +30,7 @@ fn main() -> std::io::Result<()> {
     let mmap = Arc::new(unsafe { Mmap::map(&file)? });
 
     let chunk_size = 20_000_000;
+    let estimated_unique_cities = 50_000;
 
     // 2. Producer + Consumer + Rayon reduction in a scoped thread
     let combined: ChunkMap = thread::scope(|s| {
@@ -38,15 +43,18 @@ fn main() -> std::io::Result<()> {
             let mut buf = Vec::with_capacity(chunk_size);
             let mut line_offset = 0;
             let mut total_lines = 0;
+            let mut chunk_lines = 0;
 
-            for nl in memchr_iter(b'\n', bytes) {
+            for nl in memchr_iter(b'\n', bytes) { // memchr is SIMD-accelerated
                 if nl > line_offset {
                     buf.push((line_offset, nl));
                     total_lines += 1;
+                    chunk_lines += 1;
                     if buf.len() == chunk_size {
                         sender.send(std::mem::take(&mut buf)).unwrap();
                         log_stage(&start, &format!("📤 Sent {} lines", total_lines));
                         buf = Vec::with_capacity(chunk_size);
+                        chunk_lines = 0; // Reset local chunk counter
                     }
                 }
                 line_offset = nl + 1;
@@ -68,9 +76,11 @@ fn main() -> std::io::Result<()> {
                 let mmap = Arc::clone(&mmap_for_tasks);
                 move |ranges: Vec<(usize, usize)>| {
                     let bytes: &[u8] = &*mmap;
-                    let mut map: ChunkMap = ChunkMap::default();
+                    // Preallocate chunk map with estimated unique cities
+                    let mut map: ChunkMap = HashMap::with_capacity_and_hasher(estimated_unique_cities, BuildHasherDefault::<FxHasher>::default());
 
                     for (start, end) in ranges {
+                        // fast_float is SIMD-accelerated for float parsing
                         if let Ok(line) = std::str::from_utf8(&bytes[start..end]) {
                             if let Some((city, temp_str)) = line.split_once(';') {
                                 if let Ok(temp) = fast_parse::<f32, _>(temp_str) {
@@ -89,7 +99,7 @@ fn main() -> std::io::Result<()> {
                     map
                 }
             })
-            .reduce(ChunkMap::default, |mut acc, chunk_map| {
+            .reduce(|| HashMap::with_capacity_and_hasher(estimated_unique_cities, BuildHasherDefault::<FxHasher>::default()), |mut acc, chunk_map| {
                 for (city, (cnt, mn, sum, mx)) in chunk_map {
                     let e = acc.entry(city).or_insert((0, mn, 0.0, mx));
                     e.0 += cnt;
@@ -103,12 +113,13 @@ fn main() -> std::io::Result<()> {
 
     // 3. Final aggregation: compute mean
     log_stage(&start, "🧮 Finalizing averages");
-    let final_map: FinalMap = combined
-        .into_iter()
-        .map(|(city, (cnt, mn, sum, mx))| {
-            (city, (mn, sum / cnt as f32, mx))
-        })
-        .collect();
+    let final_map: FinalMap = {
+        let mut map = HashMap::with_capacity_and_hasher(estimated_unique_cities, BuildHasherDefault::<FxHasher>::default());
+        for (city, (cnt, mn, sum, mx)) in combined {
+            map.insert(city, (mn, sum / cnt as f32, mx));
+        }
+        map
+    };
 
     log_stage(&start, &format!("✅ Done in {:.2?}", start.elapsed()));
     log_stage(&start, &format!("📍 Total unique cities: {}", final_map.len()));
