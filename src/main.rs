@@ -1,15 +1,24 @@
 use std::fs::File;
-use std::sync::Arc;
-use std::time::Instant;
-use std::thread;
 use std::hash::BuildHasherDefault;
+use std::sync::Arc;
+use std::thread;
+use std::time::Instant;
 
-use memmap2::Mmap;
-use memchr::memchr_iter;
+use clap::Parser;
 use crossbeam::channel::bounded;
 use hashbrown::HashMap;
-use rustc_hash::FxHasher;
+use memchr::{memchr, memchr_iter};
+use memmap2::Mmap;
 use rayon::prelude::*;
+use rustc_hash::FxHasher;
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Use memchr-based splitting instead of standard split_once
+    #[arg(short, long)]
+    memchr: bool,
+}
 
 // Per‐chunk stats: (count, min, sum, max), with owned String keys
 type ChunkMap = HashMap<String, (u64, f32, f32, f32), BuildHasherDefault<FxHasher>>;
@@ -17,8 +26,21 @@ type ChunkMap = HashMap<String, (u64, f32, f32, f32), BuildHasherDefault<FxHashe
 type FinalMap = HashMap<String, (f32, f32, f32), BuildHasherDefault<FxHasher>>;
 
 fn main() -> std::io::Result<()> {
+    let args = Args::parse();
+
     let start = Instant::now();
-    log_stage(&start, "🚀 Memory-mapping the file");
+    let splitting_method = if args.memchr {
+        "memchr-based"
+    } else {
+        "standard split_once"
+    };
+    log_stage(
+        &start,
+        &format!(
+            "🚀 Memory-mapping the file (using {} splitting)",
+            splitting_method
+        ),
+    );
 
     // 1. Memory‐map the CSV
     let file = File::open("./data/weather_stations_1000000000.csv")?;
@@ -27,6 +49,7 @@ fn main() -> std::io::Result<()> {
     let chunk_size = 20_000_000;
 
     // 2. Producer + Consumer + Rayon reduction in a scoped thread
+    let use_memchr = args.memchr;
     let combined: ChunkMap = thread::scope(|s| {
         let (sender, receiver) = bounded::<Vec<(usize, usize)>>(100);
         let producer_mmap = Arc::clone(&mmap);
@@ -53,7 +76,10 @@ fn main() -> std::io::Result<()> {
             if !buf.is_empty() {
                 sender.send(buf).unwrap();
             }
-            log_stage(&start, &format!("✅ Finished splitting {} lines", total_lines));
+            log_stage(
+                &start,
+                &format!("✅ Finished splitting {} lines", total_lines),
+            );
             drop(sender);
         });
 
@@ -71,7 +97,13 @@ fn main() -> std::io::Result<()> {
 
                     for (start, end) in ranges {
                         if let Ok(line) = std::str::from_utf8(&bytes[start..end]) {
-                            if let Some((city, temp_str)) = line.split_once(';') {
+                            let split_result = if use_memchr {
+                                split_line_memchr(line)
+                            } else {
+                                split_line_standard(line)
+                            };
+
+                            if let Some((city, temp_str)) = split_result {
                                 if let Ok(temp) = temp_str.parse::<f32>() {
                                     // Use owned String key
                                     let key = city.to_string();
@@ -104,13 +136,14 @@ fn main() -> std::io::Result<()> {
     log_stage(&start, "🧮 Finalizing averages");
     let final_map: FinalMap = combined
         .into_iter()
-        .map(|(city, (cnt, mn, sum, mx))| {
-            (city, (mn, sum / cnt as f32, mx))
-        })
+        .map(|(city, (cnt, mn, sum, mx))| (city, (mn, sum / cnt as f32, mx)))
         .collect();
 
     log_stage(&start, &format!("✅ Done in {:.2?}", start.elapsed()));
-    log_stage(&start, &format!("📍 Total unique cities: {}", final_map.len()));
+    log_stage(
+        &start,
+        &format!("📍 Total unique cities: {}", final_map.len()),
+    );
 
     // Print top 10 cities
     for (city, (mn, mean, mx)) in final_map.iter().take(10) {
@@ -122,4 +155,23 @@ fn main() -> std::io::Result<()> {
 
 fn log_stage(start: &Instant, msg: &str) {
     println!("[{:>6.2}s] {}", start.elapsed().as_secs_f64(), msg);
+}
+
+/// Fast memchr-based splitter function that finds the first semicolon
+/// and returns (city, temperature_str) if found
+#[inline]
+fn split_line_memchr(line: &str) -> Option<(&str, &str)> {
+    let bytes = line.as_bytes();
+    memchr(b';', bytes).map(|pos| unsafe {
+        let city = line.get_unchecked(..pos);
+        let temp = line.get_unchecked(pos + 1..);
+        (city, temp)
+    })
+}
+
+/// Standard split_once-based splitter function for comparison
+/// Returns (city, temperature_str) if found
+#[inline]
+fn split_line_standard(line: &str) -> Option<(&str, &str)> {
+    line.split_once(';')
 }
