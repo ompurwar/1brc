@@ -3,15 +3,17 @@ use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
-
 use clap::Parser;
 use crossbeam::channel::bounded;
-use fast_float;
-use gxhash::GxHasher;
-use hashbrown::HashMap;
 use memchr::{memchr, memchr_iter};
 use memmap2::Mmap;
 use rayon::prelude::*;
+use mimalloc::MiMalloc;
+use gxhash::GxHasher;
+use hashbrown::HashMap;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -48,6 +50,7 @@ fn main() -> std::io::Result<()> {
     let mmap = Arc::new(unsafe { Mmap::map(&file)? });
 
     let chunk_size = 20_000_000;
+    let estimated_unique_cities = 50_000;
 
     // 2. Producer + Consumer + Rayon reduction in a scoped thread
     let use_memchr = args.memchr;
@@ -61,15 +64,18 @@ fn main() -> std::io::Result<()> {
             let mut buf = Vec::with_capacity(chunk_size);
             let mut line_offset = 0;
             let mut total_lines = 0;
+            let mut _chunk_lines = 0; // Prefix with underscore to indicate intentionally unused
 
-            for nl in memchr_iter(b'\n', bytes) {
+            for nl in memchr_iter(b'\n', bytes) { // memchr is SIMD-accelerated
                 if nl > line_offset {
                     buf.push((line_offset, nl));
                     total_lines += 1;
+                    _chunk_lines += 1;
                     if buf.len() == chunk_size {
                         sender.send(std::mem::take(&mut buf)).unwrap();
                         log_stage(&start, &format!("📤 Sent {} lines", total_lines));
                         buf = Vec::with_capacity(chunk_size);
+                        _chunk_lines = 0; // Reset local chunk counter
                     }
                 }
                 line_offset = nl + 1;
@@ -94,9 +100,11 @@ fn main() -> std::io::Result<()> {
                 let mmap = Arc::clone(&mmap_for_tasks);
                 move |ranges: Vec<(usize, usize)>| {
                     let bytes: &[u8] = &*mmap;
-                    let mut map: ChunkMap = ChunkMap::default();
+                    // Preallocate chunk map with estimated unique cities
+                    let mut map: ChunkMap = HashMap::with_capacity_and_hasher(estimated_unique_cities, BuildHasherDefault::<GxHasher>::default());
 
                     for (start, end) in ranges {
+                        // fast_float is SIMD-accelerated for float parsing
                         if let Ok(line) = std::str::from_utf8(&bytes[start..end]) {
                             let split_result = if use_memchr {
                                 split_line_memchr(line)
@@ -121,7 +129,7 @@ fn main() -> std::io::Result<()> {
                     map
                 }
             })
-            .reduce(ChunkMap::default, |mut acc, chunk_map| {
+            .reduce(|| HashMap::with_capacity_and_hasher(estimated_unique_cities, BuildHasherDefault::<GxHasher>::default()), |mut acc, chunk_map| {
                 for (city, (cnt, mn, sum, mx)) in chunk_map {
                     let e = acc.entry(city).or_insert((0, mn, 0.0, mx));
                     e.0 += cnt;
@@ -176,3 +184,4 @@ fn split_line_memchr(line: &str) -> Option<(&str, &str)> {
 fn split_line_standard(line: &str) -> Option<(&str, &str)> {
     line.split_once(';')
 }
+
