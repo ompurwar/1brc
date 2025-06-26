@@ -6,11 +6,12 @@ use std::time::Instant;
 
 use clap::Parser;
 use crossbeam::channel::bounded;
+use fast_float;
+use gxhash::GxHasher;
 use hashbrown::HashMap;
 use memchr::{memchr, memchr_iter};
 use memmap2::Mmap;
 use rayon::prelude::*;
-use rustc_hash::FxHasher;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -20,10 +21,10 @@ struct Args {
     memchr: bool,
 }
 
-// Per‐chunk stats: (count, min, sum, max), with owned String keys
-type ChunkMap = HashMap<String, (u64, f32, f32, f32), BuildHasherDefault<FxHasher>>;
+// Per‐chunk stats: (count, min, sum, max), with String keys
+type ChunkMap = HashMap<String, (u64, f32, f32, f32), BuildHasherDefault<GxHasher>>;
 // Final stats: (min, mean, max)
-type FinalMap = HashMap<String, (f32, f32, f32), BuildHasherDefault<FxHasher>>;
+type FinalMap = HashMap<String, (f32, f32, f32), BuildHasherDefault<GxHasher>>;
 
 fn main() -> std::io::Result<()> {
     let args = Args::parse();
@@ -104,8 +105,8 @@ fn main() -> std::io::Result<()> {
                             };
 
                             if let Some((city, temp_str)) = split_result {
-                                if let Ok(temp) = temp_str.parse::<f32>() {
-                                    // Use owned String key
+                                if let Ok(temp) = fast_float::parse::<f32, _>(temp_str) {
+                                    // Use String key since borrowed strings don't live long enough
                                     let key = city.to_string();
                                     let entry = map.entry(key).or_insert((0, temp, 0.0, temp));
                                     entry.0 += 1;
